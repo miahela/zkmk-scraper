@@ -1,0 +1,28 @@
+# Virtual environment
+.venv/
+venv/
+env/
+
+# IDE
+.idea/
+.vscode/
+*.iml
+
+# Claude Code
+.claude/
+
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+
+# Scraper output (generated data — run the scraper to produce these)
+zkmk_companies.csv
+priority_companies.csv
+
+# Scraper runtime artifacts
+scraping_progress.json
+failed_categories.txt
+*.log
+debug_*.html
+snippet_*.txt
