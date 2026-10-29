@@ -15,6 +15,7 @@ import sys
 import time
 from dataclasses import dataclass, asdict
 from datetime import datetime
+from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 from urllib.parse import urljoin
 
@@ -179,7 +180,22 @@ class ZKMKScraper:
     OUTPUT_CSV = 'zkmk_companies.csv'
     PRIORITY_CSV = 'priority_companies.csv'
 
-    def __init__(self, categories_csv: str, delay: Tuple[float, float] = (1.0, 2.0)):
+    def __init__(self, categories_csv: str, delay: Tuple[float, float] = (1.0, 2.0),
+                 output: str = 'zkmk_companies.csv', priority_output: str = 'priority_companies.csv',
+                 max_pages: int = 50, debug: bool = False):
+        if not 0 <= delay[0] <= delay[1]:
+            raise ValueError('Delay must satisfy 0 <= MIN <= MAX')
+        if max_pages < 1:
+            raise ValueError('max_pages must be at least 1')
+        if os.path.abspath(output) == os.path.abspath(priority_output):
+            raise ValueError('Output paths must be different')
+        if os.path.abspath(categories_csv) in {os.path.abspath(output), os.path.abspath(priority_output)}:
+            raise ValueError('Output paths must not overwrite the categories CSV')
+        self.OUTPUT_CSV = output
+        self.PRIORITY_CSV = priority_output
+        self.max_pages = max_pages
+        self.debug = debug
+        self._debug_page = 0
         self.categories = CategoryManager(categories_csv)
         self.delay = delay
         self._written: set = set()  # tracks which CSV files have had a header written
@@ -192,7 +208,6 @@ class ZKMKScraper:
             ),
             'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
             'Accept-Language': 'mk,mk-MK;q=0.9,en-US;q=0.7,en;q=0.3',
-            'Accept-Encoding': 'gzip, deflate, br',
             'Connection': 'keep-alive',
         })
 
@@ -204,26 +219,42 @@ class ZKMKScraper:
                 r = self.session.get(url, timeout=15)
                 r.raise_for_status()
                 r.encoding = 'utf-8'
+                if self.debug:
+                    self._debug_page += 1
+                    path = Path(f'debug_page_{self._debug_page}.html')
+                    path.write_text(r.text, encoding='utf-8')
+                    print(f'\n    HTTP {r.status_code} | {r.url} | {len(r.content)} bytes | saved {path}')
                 time.sleep(random.uniform(*self.delay))
                 return r.text
-            except requests.exceptions.RequestException:
+            except requests.exceptions.RequestException as exc:
                 if attempt < retries - 1:
                     time.sleep(2 ** attempt)
+                else:
+                    print(f'\n    Request failed after {retries} attempts: {url} | {type(exc).__name__}: {exc}')
         return None
 
     def _scrape_category(self, category: Dict) -> List[Company]:
         companies = []
-        url = category['url']
-        for _ in range(50):  # hard page limit per category
+        url = urljoin(self.BASE_URL, category['url'])
+        visited = set()
+        for _ in range(self.max_pages):
+            if url in visited:
+                break
+            visited.add(url)
             html = self._get(url)
             if not html:
                 break
-            companies.extend(CompanyExtractor.from_html(html, category['name']))
-            url = CompanyExtractor.next_page_url(html)
-            if not url:
+            page_companies = CompanyExtractor.from_html(html, category['name'])
+            if not page_companies:
+                soup = BeautifulSoup(html, 'html.parser')
+                title = soup.title.get_text(' ', strip=True) if soup.title else '(no title)'
+                print(f'\n    No listings parsed: {url} | title: {title[:160]}')
+                print('    The page may be empty, blocked, or use a different layout. Use --debug to save HTML.')
+            companies.extend(page_companies)
+            next_url = CompanyExtractor.next_page_url(html)
+            if not next_url:
                 break
-            if not url.startswith('http'):
-                url = urljoin(self.BASE_URL, url)
+            url = urljoin(url, next_url)
         return companies
 
     def _append_csv(self, path: str, companies: List[Company], priority_label: str):
@@ -267,15 +298,18 @@ class ZKMKScraper:
         mode='priority' : high-priority retail/trading categories only
         mode='full'     : priority first, then all remaining (default)
         """
+        self._written.clear()
+        self._append_csv(self.OUTPUT_CSV, [], '')
+        self._append_csv(self.PRIORITY_CSV, [], '')
         if mode == 'test':
             cats = self.categories.categories[:3]
-            print(f'TEST MODE — {len(cats)} categories\n')
+            print(f'TEST MODE - {len(cats)} categories\n')
             total = self._run_phase(cats, is_priority=False)
             print(f'\nDone. {total} companies -> {self.OUTPUT_CSV}')
 
         elif mode == 'priority':
             cats = self.categories.priority_categories
-            print(f'PRIORITY MODE — {len(cats)} categories\n')
+            print(f'PRIORITY MODE - {len(cats)} categories\n')
             total = self._run_phase(cats, is_priority=True)
             print(f'\nDone. {total} companies -> {self.OUTPUT_CSV}, {self.PRIORITY_CSV}')
 
@@ -283,7 +317,7 @@ class ZKMKScraper:
             cats_p = self.categories.priority_categories
             cats_r = self.categories.regular_categories
 
-            print(f'PHASE 1 — {len(cats_p)} high-priority categories\n')
+            print(f'PHASE 1 - {len(cats_p)} high-priority categories\n')
             p_total = self._run_phase(cats_p, is_priority=True)
             print(f'\nPhase 1 done. {p_total} companies -> {self.PRIORITY_CSV}\n')
 
@@ -292,7 +326,7 @@ class ZKMKScraper:
                 print('Stopped.')
                 return
 
-            print(f'\nPHASE 2 — {len(cats_r)} remaining categories\n')
+            print(f'\nPHASE 2 - {len(cats_r)} remaining categories\n')
             r_total = self._run_phase(cats_r, is_priority=False)
             print(f'\nDone. {p_total + r_total} total companies -> {self.OUTPUT_CSV}')
 
@@ -310,21 +344,33 @@ def main():
     )
     parser.add_argument('--mode', choices=['full', 'priority', 'test'], default='full')
     parser.add_argument(
-        '--categories', default='zlatna-kniga-categories.csv',
+        '--categories', default=os.getenv('ZKMK_CATEGORIES', 'zlatna-kniga-categories.csv'),
         help='path to the categories CSV (default: zlatna-kniga-categories.csv)',
     )
     parser.add_argument(
         '--delay', nargs=2, type=float, metavar=('MIN', 'MAX'), default=[1.0, 2.0],
         help='request delay range in seconds (default: 1.0 2.0)',
     )
+    parser.add_argument('--output', default=os.getenv('ZKMK_OUTPUT', 'zkmk_companies.csv'))
+    parser.add_argument('--priority-output', default=os.getenv('ZKMK_PRIORITY_OUTPUT', 'priority_companies.csv'))
+    parser.add_argument('--max-pages', type=int, default=50, help='maximum pages per category (default: 50)')
+    parser.add_argument('--debug', action='store_true', help='show HTTP details and save fetched HTML to ignored debug_page_*.html files')
     args = parser.parse_args()
+    if not 0 <= args.delay[0] <= args.delay[1]:
+        parser.error('delay must satisfy 0 <= MIN <= MAX')
+    if args.max_pages < 1:
+        parser.error('max-pages must be at least 1')
 
     if not os.path.exists(args.categories):
         print(f"Error: '{args.categories}' not found.")
         sys.exit(1)
 
     print(f'ZK.MK Scraper | mode={args.mode} | delay={args.delay[0]}-{args.delay[1]}s\n')
-    scraper = ZKMKScraper(args.categories, delay=tuple(args.delay))
+    try:
+        scraper = ZKMKScraper(args.categories, delay=tuple(args.delay), output=args.output,
+                              priority_output=args.priority_output, max_pages=args.max_pages, debug=args.debug)
+    except ValueError as exc:
+        parser.error(str(exc))
     try:
         scraper.run(mode=args.mode)
     except KeyboardInterrupt:

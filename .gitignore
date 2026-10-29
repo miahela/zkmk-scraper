@@ -1,5 +1,7 @@
 # Virtual environment
 .venv/
+.env
+output/
 venv/
 env/
 

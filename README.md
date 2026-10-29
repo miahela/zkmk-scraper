@@ -1,72 +1,56 @@
 # ZK.MK Business Directory Scraper
 
-A Python scraper for [ZK.MK](https://zk.mk/) (Златна Книга / Golden Book), the Macedonian business directory. Extracts company names, contact details, and addresses across 2,197 business categories.
+Turns public ZK.MK category listings into CSV files for business research and spreadsheet workflows. It extracts company names, primary phone numbers, addresses, cities, listing links and directory IDs. Retail and trading categories can be processed first.
 
-A previous full run collected **56,000+ company records** spanning tailors, automotive dealers, pharmacies, tech services, and everything in between.
+## Screenshot
 
-## Data collected
+`docs/screenshot.png` is a placeholder. Replace it with a terminal or spreadsheet screenshot from your own run, with contact details hidden.
 
-| Field | Description |
-|---|---|
-| `name` | Company name |
-| `category` | Business category |
-| `phone` | Primary phone number |
-| `address` | Street address |
-| `city` | City |
-| `company_url` | Relative URL on zk.mk |
-| `zkid` | Internal directory ID |
-| `priority` | `HIGH` for retail/trading categories, `REGULAR` otherwise |
+![Screenshot placeholder](docs/screenshot.png)
 
-## Setup
+## Run locally
 
-```bash
-pip install -r requirements.txt
+Use Python 3.10 or newer. From this folder in PowerShell:
+
+```powershell
+python -m venv .venv
+.\.venv\Scripts\python.exe -m pip install -r requirements.txt
+.\.venv\Scripts\python.exe -m unittest discover -s tests -v
+.\.venv\Scripts\python.exe scraper.py --mode test --max-pages 1
 ```
 
-## Usage
+The category CSV contains three public category names and URLs from `https://zk.mk/page/activities`, without company contact records. `samples/companies.csv` shows fake output data.
 
-```bash
-# Full run — priority categories first, then all 2,197
-python scraper.py
+Use `--categories path\to\categories.csv` for another input with columns `categories` and `categories-href`. Use `--mode priority` for priority categories, or `--mode full` to process priority categories and then confirm whether to continue. The sample categories may have no priority matches.
 
-# Scrape only high-priority retail/trading categories
-python scraper.py --mode priority
+## Configuration and output
 
-# Quick smoke test — first 3 categories only
-python scraper.py --mode test
+`.env.example` documents optional environment variables. The script reads process environment variables; it does not load `.env` files automatically. Set them in PowerShell, for example `$env:ZKMK_OUTPUT = 'demo.csv'`, or use CLI options:
 
-# Custom request delay (in seconds)
-python scraper.py --delay 1.5 3.0
+```powershell
+.\.venv\Scripts\python.exe scraper.py --mode test --categories zlatna-kniga-categories.csv --output demo.csv --priority-output demo-priority.csv --delay 1 2 --max-pages 1
 ```
 
-## Output
+Each run replaces both output files, including when there are no results. Defaults are `zkmk_companies.csv` and `priority_companies.csv`. Output parent folders must already exist. Output paths must differ from each other and from the input CSV. Keep generated contact data out of version control.
 
-Results are written to `zkmk_companies.csv` as they are scraped. High-priority companies are also written to `priority_companies.csv`.
+The CSV includes `name`, `category`, `phone`, `address`, `city`, `company_url`, `zkid` and `priority`. Reserved columns `phone2`, `fax`, `activities`, `working_hours` and `website` are currently empty. Listing URLs are preserved as supplied by the page.
 
-Each run starts with a fresh output file.
+## Stack
 
-## Categories
+Python, Requests, Beautiful Soup, and standard-library CSV and unittest modules.
 
-Input categories are read from `zlatna-kniga-categories.csv` (2,197 categories). The file was collected from [zk.mk/page/activities](https://zk.mk/page/activities).
+## Known limits
 
-Categories are split into two groups:
+For an empty live result, run `python scraper.py --mode test --max-pages 1 --debug`.
+Request failures now show their error, and pages without parsed listings show their title.
+Debug mode also shows HTTP status, final URL and response size, and saves fetched HTML as
+`debug_page_1.html`, etc. These files are ignored by Git and replaced by later debug runs.
+They can contain real contact details, so inspect them locally before sharing any excerpt.
 
-- **High-priority** — retail and trading businesses (automotive, electronics, fashion, food, health, etc.) — processed first
-- **Regular** — all remaining categories
-
-## Sample output
-
-```
-name,category,phone,address,city,company_url
-Емили фешн,абаџии,078 321493,Сутјеска лок.73,Штип,/emili-feshn?choice=0
-Ирена ексклузив,абаџии,077 921191,Ванчо Прке 121/3,Штип,/irena-ekskluziv?choice=0
-Крис-Кире,абаџии,070 594042,Сремски Фронт б.б,Штип,/kris-kire?choice=0
-Аљма,абаџии,070 439867,Охридска 9,Тетово,/aljma?choice=0
-Анаталија,абаџии,078 224971,Петар поп Арсов б.б.,Велес,/anatalija?choice=0
-```
-
-## Requirements
-
-- Python 3.7+
-- `requests`
-- `beautifulsoup4`
+- HTML selectors depend on the site's layout. A live check of the three sample categories returned 44 records with no duplicate name and phone pairs. Other categories and pagination still need live verification.
+- Test mode uses up to three categories. Set `--max-pages 1` for a short live check; the default is 50 pages per category.
+- Requests retry three times. A failed request or changed layout can produce an empty or partial CSV without a failing exit code. Warnings explain request failures or pages with no parsed listings. Inspect the output.
+- Repeated pagination URLs stop the category. Companies in multiple categories can still appear more than once.
+- Full mode asks for confirmation between phases and is not designed for unattended scheduling.
+- There is no browser rendering, login, checkpoint or resume support. Only listing-page fields are extracted.
+- Use appropriate delays and check the site's access rules before a larger collection.
