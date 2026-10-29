@@ -2,12 +2,6 @@
 
 Turns public ZK.MK category listings into CSV files for business research and spreadsheet workflows. It extracts company names, primary phone numbers, addresses, cities, listing links and directory IDs. Retail and trading categories can be processed first.
 
-## Screenshot
-
-`docs/screenshot.png` is a placeholder. Replace it with a terminal or spreadsheet screenshot from your own run, with contact details hidden.
-
-![Screenshot placeholder](docs/screenshot.png)
-
 ## Run locally
 
 Use Python 3.10 or newer. From this folder in PowerShell:
